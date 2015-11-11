@@ -4,7 +4,6 @@ import sys
 import os
 import json
 import requests
-import xlsxwriter
 from bs4 import BeautifulSoup as BSoup
 
 
@@ -14,14 +13,33 @@ class Crawler:
     url = 'http://www.koohbaad.ir/'
 
     def __init__(self):
-        request = requests.get(self.url).text.strip()
-        site = BSoup(request, 'html.parser')
+        request = self.requester(self.url)
+        if not request:
+            raise 'Please try agin'
+        site = BSoup(request.text.strip(), 'html.parser')
         # self.products_pages = []
         self.sub_categories_links = dict()
         self.__categories_link_update(site)
         self.site_map = self.__categories_link_update(site)
         self.__get_products()
 
+
+    def requester(self, url):
+        print '--------- wait for requesting %s ----------->>' % url
+        try:
+            request = requests.get(url)
+            return request
+        except requests.exceptions.Timeout:
+            print 'shit time out! but we try again'
+            self.requester()
+        except requests.exceptions.ConnectTimeout:
+            print 'Too slow network Dude! but we try again'
+            self.requester()
+        except requests.exceptions.RequestException:
+            return
+        if request.response == 200:
+            return request
+        self.requester()
 
     def __categories_link_update(self, site):
         category_class = '.k2CMSListMenuLI'
@@ -34,31 +52,33 @@ class Crawler:
                 break
             in_load.update({'name': category.a.text,
                             'c1_categories': []})
+            print '#' * 20, 'category %d' %index, category.a.text , '#' * 20
             for sub in category.ul.select(c1_category_class):
+                print '*' * 20, 'c1-category--', sub.text , '*' * 20
                 sub_link = self.__normalize_links(sub.get('href'))
                 c1_category = {
                     'name': sub.text,
                     'link': sub_link,
                     'c2_categories': []
                 }
-                c1_req = requests.get(sub_link).text.strip()
-                c1_page = BSoup(c1_req, 'html.parser')
+                c1_req = self.requester(sub_link)
+                if not c1_req:
+                    continue
+                c1_page = BSoup(c1_req.text.strip(), 'html.parser')
                 sub2_links = c1_page.select('#sideMenu')[0].find_all('a')
                 for sub2 in sub2_links:
+                    print '%' * 20, 'c2-category--', sub2.text , '%' * 20
                     sub2_link = self.__normalize_links(sub2.get('href'))
                     c2_category = {
                     'name': sub2.text,
                     'link': sub2_link
                     }
                     c1_category['c2_categories'].append(c2_category)
-                    print '$&' * 100
-                    print c1_category
                 in_load['c1_categories'].append(c1_category)
             response.append(in_load)
-        # with open("map.json", "a") as f:
-        #     f.write(json.dumps(response))
-        #     f.close()
-        # print '^' * 200
+            print '#' * 200
+            print '----------finished categories tree------'
+            print '#' * 200
         return response
 
     def __normalize_links(self, href):
@@ -85,17 +105,13 @@ class Crawler:
             return pages
         for link in page_links:
            pages.append(self.__normalize_links(link.get('href')))
-           return pages
+        return pages
 
     def __product_getter(self, pages):
-        print pages
         for index, link in enumerate(pages):
-            try:
-                print link, '%' * 50
-                req = requests.get(link)
-            except:
+            req = self.requester(link)
+            if not req:
                 continue
-            print req, '%' * 30
             page = BSoup(req.text.strip(), 'html.parser')
             items = []
             for item in page.select('.ProductItem'):
@@ -106,25 +122,34 @@ class Crawler:
                         item.a.select('.ProductPrice')[0].span.text)
                 )
                 items.append(product)
+                print '#' * 20, 'Got product --> %s' % product['name'], '#' * 20
             return items
 
 
     def __get_products(self):
+        len_products = 0
         for category in self.site_map:
             for c1 in category['c1_categories']:
                 for c2 in c1['c2_categories']:
-                    print c2
+                    req = self.requester(c2['link'])
+                    if not req:
+                        continue
                     product_page = BSoup(
-                        requests.get(c2['link']).text.strip(),
+                        req.text.strip(),
                         'html.parser')
                     pages = self.__get_pages_link(product_page)
                     products = self.__product_getter(pages)
                     c2.update({
                         'products': products
                     })
-                    print c2
-                    print '%' * 200
+                    len_products += len(c2['products'])
+                    print ' finished product found %d product ' % len_products
 
+    @property
+    def get_export(self):
+        with open("map.json", "a") as f:
+            f.write(json.dumps(self.site_map))
+            f.close()
 
     # def __pages_update(self):
     #     for link in self.links:
@@ -138,4 +163,4 @@ class Crawler:
 
 
 if __name__ == '__main__':
-    crawler = Crawler()
+    crawler = Crawler().get_export
